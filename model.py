@@ -2,6 +2,7 @@ import math
 from turtle import forward
 import torch
 import torch.nn as nn
+import torch.functional as F
 
 class InputEmbedding(nn.Module):
     
@@ -52,3 +53,78 @@ class LayerNormalization(nn.Module):
         mean = x.mean(dim = -1, keepdim=True)
         std = x.std(dim = -1, keepdim=True)
         return self.alpha * (x - mean) / (std + self.eps) + self.beta
+    
+    
+class FeedForwardLayer(nn.Module):
+    
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.linear1 = nn.Linear(d_model, d_ff)
+        self.linear2 = nn.Linear(d_ff, d_model)
+        
+    def forward(self, x):
+        x = self.dropout(torch.relu(self.linear1(x)))
+        x = self.linear2(x)
+        return x
+    
+    
+class MultiHeadAttentionBlock(nn.Module):
+    
+    def __init__(self, d_model: int, n_heads: int, dropout: float) -> None:
+        super().__init__()
+        assert d_model % n_heads == 0, 'd_model must be divisible by n_heads'
+        self.dropout = nn.Dropout(dropout)
+        self.w_q = nn.Linear(d_model, d_model)
+        self.w_k = nn.Linear(d_model, d_model)
+        self.w_v = nn.Linear(d_model, d_model)
+        self.w_o = nn.Linear(d_model, d_model)
+        self.d_k = d_model // n_heads
+        self.n_heads = n_heads
+        
+    @staticmethod
+    def attention(q: torch.FloatTensor, k: torch.FloatTensor, v: torch.FloatTensor, mask, dropout: nn.Dropout):
+        # (batch_size, n_heads, seq_len, d_k) --> (batch_size, n_heads, seq_len, seq_len)
+        score = (q @ k.transpose(-2, -1)) / math.sqrt(v.size(-1))
+        if mask is not None:
+            score = score.masked_fill(mask == 0, -1e9)
+        score = score.softmax(dim = -1)
+        if dropout is not None:
+            score = dropout(score)
+        return score @ v, score
+        
+    def forward(self, x: torch.FloatTensor, mask) -> torch.FloatTensor:
+        # (batch_size, seq_len, d_model) --> (batch_size, n_heads, seq_len, d_k)
+        query = self.w_q(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        key = self.w_k(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        value = self.w_v(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        
+        # (batch_size, n_heads, seq_len, d_k) --> (batch_size, n_heads, seq_len, d_k)
+        x, score = MultiHeadAttentionBlock.attention(query, key, value, mask, self.dropout)
+        # (batch_size, n_heads, seq_len, d_k) --> (batch_size, seq_len, d_model)
+        x = x.transpose(1, 2).contiguous().view(-1, x.size(1), self.n_heads * self.d_k)
+        return self.w_o(x)
+    
+class ResidualConnection(nn.Module):
+    
+    def __init__(self, dropout: float) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.norm = LayerNormalization()
+        
+    def forward(self, x: torch.FloatTensor, sublayer: nn.Module) -> torch.FloatTensor:
+        return x + self.dropout(sublayer(self.norm(x)))
+    
+class EncoderBlock(nn.Module):
+    
+    def __init__(self, self_attention: MultiHeadAttentionBlock, feed_forward: FeedForwardLayer, dropout: float) -> None:
+        super().__init__()
+        self.self_attention = self_attention
+        self.feed_forward = feed_forward
+        self.residual1 = ResidualConnection(dropout)
+        self.residual2 = ResidualConnection(dropout)
+        
+    def forward(self, x: torch.FloatTensor, src_mask) -> torch.FloatTensor:
+        x = self.residual1(x, lambda x: self.self_attention(x, src_mask))
+        x = self.residual2(x, self.feed_forward)
+        return x
