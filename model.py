@@ -93,11 +93,11 @@ class MultiHeadAttentionBlock(nn.Module):
             score = dropout(score)
         return score @ v, score
         
-    def forward(self, x: torch.FloatTensor, mask) -> torch.FloatTensor:
+    def forward(self, q, k, v, mask) -> torch.FloatTensor:
         # (batch_size, seq_len, d_model) --> (batch_size, n_heads, seq_len, d_k)
-        query = self.w_q(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
-        key = self.w_k(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
-        value = self.w_v(x).view(-1, x.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        query = self.w_q(q).view(-1, q.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        key = self.w_k(k).view(-1, k.size(1), self.n_heads, self.d_k).transpose(1, 2)
+        value = self.w_v(v).view(-1, v.size(1), self.n_heads, self.d_k).transpose(1, 2)
         
         # (batch_size, n_heads, seq_len, d_k) --> (batch_size, n_heads, seq_len, d_k)
         x, score = MultiHeadAttentionBlock.attention(query, key, value, mask, self.dropout)
@@ -125,6 +125,19 @@ class EncoderBlock(nn.Module):
         self.residual2 = ResidualConnection(dropout)
         
     def forward(self, x: torch.FloatTensor, src_mask) -> torch.FloatTensor:
-        x = self.residual1(x, lambda x: self.self_attention(x, src_mask))
+        x = self.residual1(x, lambda x: self.self_attention(x, x, x, src_mask))
         x = self.residual2(x, self.feed_forward)
         return x
+    
+   
+class Encoder(nn.Module):
+    """Some Information about Encoder"""
+    def __init__(self, layers: nn.ModuleList):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return self.norm(x)
