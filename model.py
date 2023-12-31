@@ -4,6 +4,32 @@ import torch
 import torch.nn as nn
 import torch.functional as F
 
+class LayerNormalization(nn.Module):
+    
+    def __init__(self, eps: float = 1e-5) -> None:
+        super().__init__()
+        self.eps = eps
+        self.alpha = nn.Parameter(torch.ones(1)) # start with 1
+        self.beta = nn.Parameter(torch.zeros(1)) # start with 0
+        
+    def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
+        mean = x.mean(dim = -1, keepdim=True)
+        std = x.std(dim = -1, keepdim=True)
+        return self.alpha * (x - mean) / (std + self.eps) + self.beta
+    
+class FeedForwardLayer(nn.Module):
+    
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.linear1 = nn.Linear(d_model, d_ff)
+        self.linear2 = nn.Linear(d_ff, d_model)
+        
+    def forward(self, x):
+        x = self.dropout(torch.relu(self.linear1(x)))
+        x = self.linear2(x)
+        return x
+    
 class InputEmbedding(nn.Module):
     
     def __init__(self, d_model: int, vocab_size: int) -> None:
@@ -41,33 +67,15 @@ class PositionEmbedding(nn.Module):
         x = x + (self.pe[:, :x.size(1), :]).requires_grad_(False)
         return self.dropout(x)
 
-class LayerNormalization(nn.Module):
+class ResidualConnection(nn.Module):
     
-    def __init__(self, eps: float = 1e-5) -> None:
-        super().__init__()
-        self.eps = eps
-        self.alpha = nn.Parameter(torch.ones(1)) # start with 1
-        self.beta = nn.Parameter(torch.zeros(1)) # start with 0
-        
-    def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
-        mean = x.mean(dim = -1, keepdim=True)
-        std = x.std(dim = -1, keepdim=True)
-        return self.alpha * (x - mean) / (std + self.eps) + self.beta
-    
-    
-class FeedForwardLayer(nn.Module):
-    
-    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+    def __init__(self, dropout: float) -> None:
         super().__init__()
         self.dropout = nn.Dropout(dropout)
-        self.linear1 = nn.Linear(d_model, d_ff)
-        self.linear2 = nn.Linear(d_ff, d_model)
+        self.norm = LayerNormalization()
         
-    def forward(self, x):
-        x = self.dropout(torch.relu(self.linear1(x)))
-        x = self.linear2(x)
-        return x
-    
+    def forward(self, x: torch.FloatTensor, sublayer: nn.Module) -> torch.FloatTensor:
+        return x + self.dropout(sublayer(self.norm(x)))
     
 class MultiHeadAttentionBlock(nn.Module):
     
@@ -105,15 +113,6 @@ class MultiHeadAttentionBlock(nn.Module):
         x = x.transpose(1, 2).contiguous().view(-1, x.size(1), self.n_heads * self.d_k)
         return self.w_o(x)
     
-class ResidualConnection(nn.Module):
-    
-    def __init__(self, dropout: float) -> None:
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        self.norm = LayerNormalization()
-        
-    def forward(self, x: torch.FloatTensor, sublayer: nn.Module) -> torch.FloatTensor:
-        return x + self.dropout(sublayer(self.norm(x)))
     
 class EncoderBlock(nn.Module):
     
@@ -137,7 +136,66 @@ class Encoder(nn.Module):
         self.layers = layers
         self.norm = LayerNormalization()
 
-    def forward(self, x):
+    def forward(self, x, src_mask):
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, src_mask)
         return self.norm(x)
+    
+class DecoderBlock(nn.Module):
+    
+    def __init__(self, self_attention: MultiHeadAttentionBlock, cross_attention: MultiHeadAttentionBlock, feed_forward: FeedForwardLayer, dropout: float) -> None:
+        super().__init__()
+        self.self_attention = self_attention
+        self.cross_attention = cross_attention
+        self.feed_forward = feed_forward
+        self.residual1 = ResidualConnection(dropout)
+        self.residual2 = ResidualConnection(dropout)
+        self.residual3 = ResidualConnection(dropout)
+        
+    def forward(self, x: torch.FloatTensor, encoder_output: torch.FloatTensor, src_mask, tgt_mask) -> torch.FloatTensor:
+        x = self.residual1(x, lambda x: self.self_attention(x, x, x, tgt_mask))
+        x = self.residual2(x, lambda x: self.cross_attention(x, encoder_output, encoder_output, src_mask))
+        x = self.residual3(x, self.feed_forward)
+        return x
+    
+class Decoder(nn.Module):
+    
+    def __init__(self, layers: nn.ModuleList):
+        super().__init__()
+        self.layers = layers
+        self.norm = LayerNormalization()
+        
+    def forward(self, x: torch.FloatTensor, encoder_output: torch.FloatTensor, src_mask, tgt_mask) -> torch.FloatTensor:
+        for layer in self.layers:
+            x = layer(x, encoder_output, src_mask, tgt_mask)
+        return self.norm(x)
+    
+class ProjectionLayer(nn.Module):
+    
+    def __init__(self, d_model: int, vocab_size: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(d_model, vocab_size)
+        
+    def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
+        return torch.log_softmax(self.linear(x), dim=-1) 
+    
+class Transformer(nn.Module):
+    
+    def __init__(self, encoder: Encoder, decoder: Decoder, src_embed: nn.Module, tgt_embed: nn.Module, src_pos: PositionEmbedding, tgt_pos: PositionEmbedding, projection: ProjectionLayer) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.src_embed = src_embed
+        self.src_pos = src_pos
+        self.tgt_embed = tgt_embed
+        self.tgt_pos = tgt_pos
+        self.projection = projection
+        
+    def encode(self, src: torch.LongTensor, src_mask) -> torch.FloatTensor:
+        return self.encoder(self.src_pos(self.src_embed(src)), src_mask)
+    
+    def decode(self, encoder_output: torch.FloatTensor, tgt: torch.LongTensor, src_mask, tgt_mask) -> torch.FloatTensor:
+        return self.decoder(self.tgt_pos(self.tgt_embed(tgt)), encoder_output, src_mask, tgt_mask)
+    
+    def project(self, x: torch.FloatTensor) -> torch.FloatTensor:
+        return self.projection(x)
