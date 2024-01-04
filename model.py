@@ -83,10 +83,10 @@ class MultiHeadAttentionBlock(nn.Module):
         super().__init__()
         assert d_model % n_heads == 0, 'd_model must be divisible by n_heads'
         self.dropout = nn.Dropout(dropout)
-        self.w_q = nn.Linear(d_model, d_model)
-        self.w_k = nn.Linear(d_model, d_model)
-        self.w_v = nn.Linear(d_model, d_model)
-        self.w_o = nn.Linear(d_model, d_model)
+        self.w_q = nn.Linear(d_model, d_model, bias=False)
+        self.w_k = nn.Linear(d_model, d_model, bias=False)
+        self.w_v = nn.Linear(d_model, d_model, bias=False)
+        self.w_o = nn.Linear(d_model, d_model, bias=False)
         self.d_k = d_model // n_heads
         self.n_heads = n_heads
         
@@ -199,3 +199,33 @@ class Transformer(nn.Module):
     
     def project(self, x: torch.FloatTensor) -> torch.FloatTensor:
         return self.projection(x)
+    
+def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seq_len: int, d_model: int = 512, d_ff: int = 2048, N: int = 6, n_heads: int = 8, dropout: float = 0.1) -> Transformer:
+    src_embed = InputEmbedding(d_model, src_vocab_size)
+    tgt_embed = InputEmbedding(d_model, tgt_vocab_size)
+    src_pos = PositionEmbedding(d_model, src_seq_len, dropout)
+    tgt_pos = PositionEmbedding(d_model, tgt_seq_len, dropout)
+    
+    encoder_blocks = []
+    for _ in range(N):
+        multi_head_attention = MultiHeadAttentionBlock(d_model, n_heads, dropout)
+        feed_forward = FeedForwardLayer(d_model, d_ff, dropout)
+        encoder_blocks.append(EncoderBlock(multi_head_attention, feed_forward, dropout))
+    
+    decoder_blocks = []
+    for _ in range(N):
+        multi_head_attention = MultiHeadAttentionBlock(d_model, n_heads, dropout)
+        cross_attention = MultiHeadAttentionBlock(d_model, n_heads, dropout)
+        feed_forward = FeedForwardLayer(d_model, d_ff, dropout)
+        decoder_blocks.append(DecoderBlock(multi_head_attention, cross_attention, feed_forward, dropout))
+        
+    encoder = Encoder(nn.ModuleList(encoder_blocks))
+    decoder = Decoder(nn.ModuleList(decoder_blocks))
+    projection = ProjectionLayer(d_model, tgt_vocab_size)
+    transformer = Transformer(encoder, decoder, src_embed, tgt_embed, src_pos, tgt_pos, projection)
+    
+    for p in transformer.parameters():
+        if p.dim() > 1:
+            nn.init.xavier_uniform_(p)
+
+    return transformer
