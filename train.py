@@ -166,10 +166,20 @@ def get_ds(config):
 
     print(f'Max length of source sentence: {max_len_src}')
     print(f'Max length of target sentence: {max_len_tgt}')
-    
 
-    train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True)
+
+    def collate_fn(batch):
+        # Remove None values from the batch
+        batch = [sample for sample in batch if sample is not None]
+
+        if len(batch) == 0:
+            # If all samples are None, return an empty tensor
+            return torch.tensor([])
+
+        return torch.utils.data.dataloader.default_collate(batch)
+
+    train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True, collate_fn=collate_fn)
+    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True, collate_fn=collate_fn)
 
     return train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt
 
