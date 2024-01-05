@@ -37,7 +37,7 @@ class BilingualDataset(Dataset):
 
         # Make sure the number of padding tokens is not negative. If it is, the sentence is too long
         if enc_num_padding_tokens < 0 or dec_num_padding_tokens < 0:
-            raise ValueError("Sentence is too long")
+            return None
 
         # Add <s> and </s> token
         encoder_input = torch.cat(
