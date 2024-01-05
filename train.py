@@ -150,6 +150,9 @@ def get_subset(dataset, percentage):
     Returns:
         datasets.Dataset: The random subset of the dataset.
     """
+    if 0. >= percentage or percentage >= 1.:
+        return dataset
+
     # Get the total number of examples in the dataset
     total_examples = len(dataset)
 
