@@ -1,0 +1,36 @@
+name: torch
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+    - python=3.9
+    - pip>=19.0
+    - torchtext
+    - datasets
+    - tokenizers
+    - torchmetrics
+    - tensorboard
+    - altair
+    - wandb
+    - pytorch
+    - transformers
+    - torchvision
+    - torchaudio
+    - jupyter
+    - scikit-learn
+    - scipy
+    - pandas
+    - pandas-datareader
+    - matplotlib
+    - pillow
+    - tqdm
+    - requests
+    - h5py
+    - pyyaml
+    - flask
+    - boto3
+    - ipykernel
+    - pip:
+        - bayesian-optimization
+        - gym
+        - kaggle

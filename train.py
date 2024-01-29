@@ -18,8 +18,9 @@ from pathlib import Path
 from datasets import load_dataset
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
-from tokenizers.trainers import WordLevelTrainer
-from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.trainers import WordLevelTrainer, BpeTrainer
+from tokenizers.pre_tokenizers import Whitespace, ByteLevel
+from transformers import BertTokenizer
 
 import torchmetrics
 from torch.utils.tensorboard import SummaryWriter
@@ -129,9 +130,12 @@ def get_all_sentences(ds, lang):
 def get_or_build_tokenizer(config, ds, lang):
     tokenizer_path = Path(config['tokenizer_file'].format(lang))
     if not Path.exists(tokenizer_path):
+        pre_tokenizer = Whitespace()
+        if lang == "zh":
+            pre_tokenizer = ByteLevel()
         # Most code taken from: https://huggingface.co/docs/tokenizers/quicktour
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
-        tokenizer.pre_tokenizer = Whitespace()
+        tokenizer.pre_tokenizer = pre_tokenizer
         trainer = WordLevelTrainer(special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"], min_frequency=2)
         tokenizer.train_from_iterator(get_all_sentences(ds, lang), trainer=trainer)
         tokenizer.save(str(tokenizer_path))
@@ -172,7 +176,7 @@ def get_subset(dataset, percentage):
 
 def get_ds(config):
     # It only has the train split, so we divide it overselves
-    ds_raw = load_dataset(f"{config['datasource']}", f"{config['lang_src']}-{config['lang_tgt']}", split='train')
+    ds_raw = load_dataset(f"{config['datasource']}", f"{config['lang_src']}-{config['lang_tgt']}", split=config.get('split', 'train'))
 
     if config.get('ds_subset'):
         ds_raw = get_subset(ds_raw, config['ds_subset'])
